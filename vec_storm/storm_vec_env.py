@@ -52,7 +52,8 @@ class StepInfo:
 
 @chex.dataclass
 class Simulator:
-    initial_state: np.int32
+    initial_state: int
+    max_outcomes: int
     transitions: SparseArray
     rewards: SparseArray
     observations: chex.Array
@@ -65,7 +66,7 @@ class Simulator:
 
     def sample_next_state(self: "Simulator", state, action, rng_key):
         l, r = self.transitions.get_row_range(state, action)
-        indices = jnp.arange(0, 128, 1) + l
+        indices = jnp.arange(0, self.max_outcomes, 1) + l
         mask = indices < r
         probs = jnp.where(mask, self.transitions.data[indices], 0)
         idx = jax.random.choice(key=rng_key, a=indices, p=probs)
@@ -80,9 +81,15 @@ class Simulator:
     def is_done(self: "Simulator", state):
         return self.sinks[state]
 
+    def get_init_states(self: "Simulator", states, rng_key=None):
+        if rng_key == None:
+            return states.at[:].set(self.initial_state)
+        else:
+            return jax.random.randint(rng_key, states.shape, 0, len(self.sinks))
+
     @partial(jax.jit, static_argnums=0)
-    def reset(self: "Simulator", states: States) -> ResetInfo:
-        new_states = states.at[:].set(self.initial_state)
+    def reset(self: "Simulator", states: States, rng_key = None) -> ResetInfo:
+        new_states = self.get_init_states(states, rng_key)
         observations = jax.vmap(lambda s: self.get_observation(s))(new_states)
         return ResetInfo(
             states = new_states,
@@ -91,14 +98,14 @@ class Simulator:
         )
 
     @partial(jax.jit, static_argnums=0)
-    def step(self: "Simulator", states, actions, rng_key) -> StepInfo:
-        rng_keys = jax.random.split(rng_key, len(states))
-        new_states, new_state_idxs = jax.vmap(lambda s, a, k: self.sample_next_state(s, a, k))(states, actions, rng_keys)
+    def step(self: "Simulator", states, actions, rng_key, random_init=False) -> StepInfo:
+        key1, key2 = jax.random.split(rng_key)
+        new_states, new_state_idxs = jax.vmap(lambda s, a, k: self.sample_next_state(s, a, k))(states, actions, jax.random.split(key1, len(states)))
         # Compute rewards of of the transitions s -> a -> s'
         rewards = jax.vmap(lambda new_s: self.get_reward(new_s))(new_state_idxs)
         done = self.sinks[new_states]
         # Reset done state s' to initial state i
-        states_after_reset = jnp.where(done, self.initial_state, new_states)
+        states_after_reset = jnp.where(done, self.get_init_states(states, rng_key=key2), new_states)
         # Compute observation of states after reset (s' or i)
         observations = jax.vmap(lambda s: self.get_observation(s))(states_after_reset)
         if self.metalabels is not None:
@@ -136,12 +143,10 @@ class StormVecEnv:
             action_labels.remove(ignore_label)
         return list(sorted(action_labels))
 
-    def __init__(self, pomdp: SparsePomdp, get_scalarized_reward, num_envs=1, seed=42, metalabels=None):
+    def __init__(self, pomdp: SparsePomdp, get_scalarized_reward, num_envs=1, seed=42, metalabels=None, random_init=False):
         """
             pomdp: The POMDP object that should be compiled into a jax-based environment.
             get_scalarized_reward: A function that accepts a dictionary indexed by reward signal names and returns a number.
-
-            
         """
         self.simulator_states = jnp.zeros(num_envs, jnp.int32)
         self.rng_key = jax.random.key(seed)
@@ -151,6 +156,7 @@ class StormVecEnv:
         self.action_labels = self.get_action_labels(self.pomdp, self.NO_LABEL)
         self.action_labels2indices = {label: i for i, label in enumerate(self.action_labels)}
         self.initial_state = pomdp.initial_states[0]
+        self.random_init = random_init
 
         rewards_types = self.simulator.get_reward_names()
         nr_states = pomdp.nr_states
@@ -215,7 +221,7 @@ class StormVecEnv:
         self.rewards.data = get_scalarized_reward(reward_data)
 
         # Metalabels
-        self.metalabels = list(metalabels.keys() or [])    
+        self.metalabels = None if metalabels is None else list(metalabels.keys())
         self.metalabels_data = None
         if self.metalabels is not None:
             self.metalabels_data = np.ones((nr_states, len(metalabels)), dtype=bool)
@@ -238,6 +244,7 @@ class StormVecEnv:
         # Save simulator data
         self.simulator = Simulator(
             initial_state = self.initial_state,
+            max_outcomes = (self.transitions.row_ends-self.transitions.row_starts).max(),
             transitions = cast2jax(self.transitions),
             rewards = cast2jax(self.rewards),
             observations = cast2jax(self.observations),
@@ -245,18 +252,25 @@ class StormVecEnv:
             allowed_actions = cast2jax(self.allowed_actions),
             metalabels = cast2jax(self.metalabels_data),
         )
+
+    def enable_random_init(self):
+        self.random_init = True
+    
+    def disable_random_init(self):
+        self.random_init = False
     
     def set_seed(self, seed):
         self.rng_key = jax.random.key(seed)
 
     def reset(self):
-        res = self.simulator.reset(self.simulator_states)
+        self.rng_key, reset_key = jax.random.split(self.rng_key)
+        res = self.simulator.reset(self.simulator_states, reset_key if self.random_init else None)
         self.simulator_states = res.states
         return res.observations
     
     def step(self, actions):
         self.rng_key, step_key = jax.random.split(self.rng_key)
-        res: StepInfo = self.simulator.step(self.simulator_states, actions, step_key)
+        res: StepInfo = self.simulator.step(self.simulator_states, actions, step_key, random_init=self.random_init)
         self.simulator_states = res.states
         return res.observations, res.rewards, res.done, res.allowed_actions, res.metalabels
 
