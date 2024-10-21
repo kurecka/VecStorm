@@ -47,6 +47,7 @@ class StepInfo:
     rewards: chex.Array
     done: chex.Array
     allowed_actions: chex.Array
+    metalabels: chex.Array
 
 
 @chex.dataclass
@@ -57,26 +58,27 @@ class Simulator:
     observations: chex.Array
     sinks: chex.Array
     allowed_actions: chex.Array
+    metalabels: chex.Array
 
     def __hash__(self):
         return id(self)
 
-    def sample_next_state(simulator: "Simulator", state, action, rng_key):
-        l, r = simulator.transitions.get_row_range(state, action)
+    def sample_next_state(self: "Simulator", state, action, rng_key):
+        l, r = self.transitions.get_row_range(state, action)
         indices = jnp.arange(0, 128, 1) + l
         mask = indices < r
-        probs = jnp.where(mask, simulator.transitions.data[indices], 0)
+        probs = jnp.where(mask, self.transitions.data[indices], 0)
         idx = jax.random.choice(key=rng_key, a=indices, p=probs)
-        return simulator.transitions.indices[idx], idx
+        return self.transitions.indices[idx], idx
 
-    def get_observation(simulator: "Simulator", state):
-        return simulator.observations[state]
+    def get_observation(self: "Simulator", state):
+        return self.observations[state]
 
-    def get_reward(simulator: "Simulator", entry_idx):
-        return simulator.rewards.data[entry_idx]
+    def get_reward(self: "Simulator", entry_idx):
+        return self.rewards.data[entry_idx]
 
-    def is_done(simulator: "Simulator", state):
-        return simulator.sinks[state]
+    def is_done(self: "Simulator", state):
+        return self.sinks[state]
 
     @partial(jax.jit, static_argnums=0)
     def reset(self: "Simulator", states: States) -> ResetInfo:
@@ -94,18 +96,23 @@ class Simulator:
         new_states, new_state_idxs = jax.vmap(lambda s, a, k: self.sample_next_state(s, a, k))(states, actions, rng_keys)
         # Compute rewards of of the transitions s -> a -> s'
         rewards = jax.vmap(lambda new_s: self.get_reward(new_s))(new_state_idxs)
-        done = jax.vmap(lambda s: self.is_done(s))(new_states)
+        done = self.sinks[new_states]
         # Reset done state s' to initial state i
         states_after_reset = jnp.where(done, self.initial_state, new_states)
         # Compute observation of states after reset (s' or i)
         observations = jax.vmap(lambda s: self.get_observation(s))(states_after_reset)
+        if self.metalabels is not None:
+            metalabels = self.metalabels[new_states]
+        else:
+            metalabels = None
 
         return StepInfo(
             states = states_after_reset,
             observations = observations,
             rewards = rewards,
             done = done,
-            allowed_actions = self.allowed_actions[states_after_reset]
+            allowed_actions = self.allowed_actions[states_after_reset],
+            metalabels = metalabels,
         )
 
 
@@ -129,10 +136,12 @@ class StormVecEnv:
             action_labels.remove(ignore_label)
         return list(sorted(action_labels))
 
-    def __init__(self, pomdp: SparsePomdp, get_scalarized_reward, num_envs=1, seed=42):
+    def __init__(self, pomdp: SparsePomdp, get_scalarized_reward, num_envs=1, seed=42, metalabels=None):
         """
             pomdp: The POMDP object that should be compiled into a jax-based environment.
             get_scalarized_reward: A function that accepts a dictionary indexed by reward signal names and returns a number.
+
+            
         """
         self.simulator_states = jnp.zeros(num_envs, jnp.int32)
         self.rng_key = jax.random.key(seed)
@@ -193,7 +202,7 @@ class StormVecEnv:
         labeling = pomdp.labeling
         self.labels = {}
         for label in labeling.get_labels():
-            self.labels[label] = np.zeros(nr_states, dtype=np.float32)
+            self.labels[label] = np.zeros(nr_states, dtype=bool)
             for state in labeling.get_states(label):
                 self.labels[label][state] = 1
 
@@ -204,6 +213,15 @@ class StormVecEnv:
             for reward_type in rewards_types
         }
         self.rewards.data = get_scalarized_reward(reward_data)
+
+        # Metalabels
+        self.metalabels = list(metalabels.keys() or [])    
+        self.metalabels_data = None
+        if self.metalabels is not None:
+            self.metalabels_data = np.ones((nr_states, len(metalabels)), dtype=bool)
+            for i, m in enumerate(self.metalabels):
+                for l in metalabels[m]:
+                    self.metalabels_data[:, i] &= self.labels[l]
 
         # Observations
         valuations = pomdp.observation_valuations
@@ -225,6 +243,7 @@ class StormVecEnv:
             observations = cast2jax(self.observations),
             sinks = cast2jax(self.sinks),
             allowed_actions = cast2jax(self.allowed_actions),
+            metalabels = cast2jax(self.metalabels_data),
         )
     
     def set_seed(self, seed):
@@ -239,4 +258,18 @@ class StormVecEnv:
         self.rng_key, step_key = jax.random.split(self.rng_key)
         res: StepInfo = self.simulator.step(self.simulator_states, actions, step_key)
         self.simulator_states = res.states
-        return res.observations, res.rewards, res.done, res.allowed_actions
+        return res.observations, res.rewards, res.done, res.allowed_actions, res.metalabels
+
+    def get_label(self, label, states=None):
+        if states is None:
+            return self.get_label(label, self.simulator_states)
+    
+        return self.labels[label][states]
+
+    def get_labels(self, states=None):
+        if states is None:
+            return self.get_labels(self.simulator_states)
+        
+        return {
+            key: val[states] for key, val in self.labels.items()
+        }
