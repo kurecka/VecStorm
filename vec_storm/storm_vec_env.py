@@ -2,6 +2,7 @@ from functools import partial
 from itertools import product
 from typing import Set, Optional
 import json
+import pickle
 
 import numpy as np
 
@@ -151,14 +152,13 @@ class StormVecEnv:
         self.simulator_states = jnp.zeros(num_envs, jnp.int32)
         self.rng_key = jax.random.key(seed)
 
-        self.pomdp = pomdp
-        self.simulator = simulator.create_simulator(self.pomdp)
-        self.action_labels = self.get_action_labels(self.pomdp, self.NO_LABEL)
+        sim = simulator.create_simulator(pomdp)
+        self.action_labels = self.get_action_labels(pomdp, self.NO_LABEL)
         self.action_labels2indices = {label: i for i, label in enumerate(self.action_labels)}
         self.initial_state = pomdp.initial_states[0]
         self.random_init = random_init
 
-        rewards_types = self.simulator.get_reward_names()
+        rewards_types = sim.get_reward_names()
         nr_states = pomdp.nr_states
         nr_actions = len(self.action_labels)
 
@@ -287,3 +287,10 @@ class StormVecEnv:
         return {
             key: val[states] for key, val in self.labels.items()
         }
+
+    def save(self, file: str):
+        pickle.dump(self, open(file, "wb"))
+    
+    @classmethod
+    def load(cls, file: str):
+        return pickle.load(open(file, "rb" ))
