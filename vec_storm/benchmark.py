@@ -49,8 +49,9 @@ if __name__ == '__main__':
     model_path = "/opt/learning/synthesis/rl_src/models/refuel-10"
     pomdp = load_pomdp(model_path)
 
-    def get_scalarized_reward(rewards):
-        return 100*rewards["refuels"] + 10*rewards["costs"] + rewards["steps"]
+    def get_scalarized_reward(rewards, rewards_types):
+        last_reward = rewards_types[-1]
+        return 100*rewards["refuels"] + 10*rewards["costs"] + rewards["steps"] + 1000*rewards[last_reward]
 
     # benchmark(pomdp)
     
@@ -75,18 +76,18 @@ if __name__ == '__main__':
         env.reset()
         for r in env.step(np.array([2]*n)):
             print(r)
-        # print_res(env.step(np.array([2]*n)))
-        # print_res(env.step(np.array([0]*n)))
-        # print_res(env.step(np.array([5]*n)))
-        # print_res(env.step(np.array([3]*n)))
-        # print_res(env.step(np.array([0]*n)))
-        # print_res(env.step(np.array([0]*n)))
-        # print_res(env.step(np.array([0]*n)))
-        # print_res(env.step(np.array([0]*n)))
-        # print_res(env.step(np.array([0]*n)))
-        # print_res(env.step(np.array([0]*n)))
-        # print_res(env.step(np.array([0]*n)))
-        # print_res(env.step(np.array([0]*n)))
-        # print_res(env.step(np.array([0]*n)))
-        # print_res(env.step(np.array([0]*n)))
+        print_res(env.step(np.array([2]*n)))
+        print_res(env.step(np.array([0]*n)))
+        print_res(env.step(np.array([5]*n)))
+        print_res(env.step(np.array([3]*n)))
+        print_res(env.step(np.array([0]*n)))
+        print_res(env.step(np.array([0]*n)))
+        print_res(env.step(np.array([0]*n)))
+        print_res(env.step(np.array([0]*n)))
+        print_res(env.step(np.array([0]*n)))
+        print_res(env.step(np.array([0]*n)))
+        print_res(env.step(np.array([0]*n)))
+        print_res(env.step(np.array([0]*n)))
+        print_res(env.step(np.array([0]*n)))
+        print_res(env.step(np.array([0]*n)))
 

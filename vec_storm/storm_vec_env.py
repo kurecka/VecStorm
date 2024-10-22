@@ -218,7 +218,7 @@ class StormVecEnv:
             reward_type: raw_rewards[reward_type].data
             for reward_type in rewards_types
         }
-        self.rewards.data = get_scalarized_reward(reward_data)
+        self.rewards.data = get_scalarized_reward(reward_data, rewards_types)
 
         # Metalabels
         self.metalabels = None if metalabels is None else list(metalabels.keys())
