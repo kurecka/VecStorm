@@ -53,41 +53,4 @@ if __name__ == '__main__':
         last_reward = rewards_types[-1]
         return 100*rewards["refuels"] + 10*rewards["costs"] + rewards["steps"] + 1000*rewards[last_reward]
 
-    # benchmark(pomdp)
-    
-    n = 1
-    for metalabels in [
-        None, {'avoid': ['traps'], 'reach': ['goal'], 'safe': ['notbad'], 'safe-reach': ['goal', 'notbad']}
-    ]:
-        env = StormVecEnv(pomdp, get_scalarized_reward, n, metalabels=metalabels)
-        env.enable_random_init()
-        def print_res(res):
-            observations = res[0].T
-            o = {l: o[:10] for l, o in zip(env.observation_labels, observations)}
-            print('----\nStep')
-            print(f"reward = {res[1][0]}")
-            print(f"done = {res[2][0]}")
-            print(f"action_mask = {res[3][0]}")
-            print(f"observations = {o}")
-
-        print(env.get_labels())
-        print(env.get_label('traps'))
-        
-        env.reset()
-        for r in env.step(np.array([2]*n)):
-            print(r)
-        print_res(env.step(np.array([2]*n)))
-        print_res(env.step(np.array([0]*n)))
-        print_res(env.step(np.array([5]*n)))
-        print_res(env.step(np.array([3]*n)))
-        print_res(env.step(np.array([0]*n)))
-        print_res(env.step(np.array([0]*n)))
-        print_res(env.step(np.array([0]*n)))
-        print_res(env.step(np.array([0]*n)))
-        print_res(env.step(np.array([0]*n)))
-        print_res(env.step(np.array([0]*n)))
-        print_res(env.step(np.array([0]*n)))
-        print_res(env.step(np.array([0]*n)))
-        print_res(env.step(np.array([0]*n)))
-        print_res(env.step(np.array([0]*n)))
-
+    benchmark(pomdp)
