@@ -8,7 +8,8 @@ from pytest import approx
 
 from vec_storm import StormVecEnv
 
-REFUEL_DET = Path(os.path.abspath(__file__)).parent / 'models/det_avoid'
+AVOID_DET = Path(os.path.abspath(__file__)).parent / 'models/det_avoid'
+AVOID_RAND = Path(os.path.abspath(__file__)).parent / 'models/rand_avoid'
 
 
 def load_pomdp(env_path):
@@ -20,7 +21,7 @@ def load_pomdp(env_path):
 
 
 def test_save_load():
-    pomdp = load_pomdp(REFUEL_DET)
+    pomdp = load_pomdp(AVOID_DET)
 
     def get_scalarized_reward(rewards, rewards_types):
         return (rewards["costs"] * 0) + 42
@@ -44,7 +45,7 @@ def _obs_to_dict(env, obs):
     }
 
 def test_reset():
-    env = StormVecEnv(load_pomdp(REFUEL_DET), _get_cost_reward, num_envs=1)
+    env = StormVecEnv(load_pomdp(AVOID_DET), _get_cost_reward, num_envs=1)
     obs, act_mask, metalabels = env.reset()
     o = _obs_to_dict(env, obs[0])
     correct_o = {
@@ -73,7 +74,7 @@ def _test_trajectory(env, actions, expected_observations, expected_rewards, expe
 
 
 def test_crash():
-    env = StormVecEnv(load_pomdp(REFUEL_DET), _get_cost_reward, num_envs=1, metalabels={"avoid": ["traps"], "reach": ["goal"]})
+    env = StormVecEnv(load_pomdp(AVOID_DET), _get_cost_reward, num_envs=1, metalabels={"avoid": ["traps"], "reach": ["goal"]})
     actions = [2, 0, 3]
     expected_observations = {
         "x": [0, 0, 1, 0],
@@ -93,7 +94,7 @@ def test_crash():
 
 
 def test_goal():
-    env = StormVecEnv(load_pomdp(REFUEL_DET), _get_cost_reward, num_envs=1, metalabels={"avoid": ["traps"], "reach": ["goal"]})
+    env = StormVecEnv(load_pomdp(AVOID_DET), _get_cost_reward, num_envs=1, metalabels={"avoid": ["traps"], "reach": ["goal"]})
     actions = [2, 0, 0, 3, 3, 4, 3, 0, 1, 0, 3]
     expected_observations = {
         "x": [0, 0, 1, 2, 2, 2, 1, 1, 2, 2, 3, 0],
@@ -121,7 +122,7 @@ def test_goal():
 
 
 def test_truncation():
-    env = StormVecEnv(load_pomdp(REFUEL_DET), _get_cost_reward, num_envs=1, metalabels={"avoid": ["traps"], "reach": ["goal"]}, max_steps=3)
+    env = StormVecEnv(load_pomdp(AVOID_DET), _get_cost_reward, num_envs=1, metalabels={"avoid": ["traps"], "reach": ["goal"]}, max_steps=3)
     actions = [2, 0, 0]
     expected_observations = {
         "x": [0, 0, 1, 0],
@@ -138,3 +139,20 @@ def test_truncation():
     ])
     
     _test_trajectory(env, actions, expected_observations, expected_rewards, expected_dones, expected_labels)
+
+def test_random_steps():
+    num_envs = 100000
+    env = StormVecEnv(load_pomdp(AVOID_RAND), _get_cost_reward, num_envs=num_envs, metalabels={"avoid": ["traps"], "reach": ["goal"]})
+    env.reset()
+    env.step(np.array([2]*num_envs))
+
+    obs = _obs_to_dict(env, env.step(np.array([0]*num_envs))[0].T)
+    assert (obs['x'] == 1).sum() + (obs['x'] == 2).sum() == num_envs
+    assert (obs['x'] == 1).mean() == approx(0.7, abs=0.01)
+    assert (obs['x'] == 2).mean() == approx(0.3, abs=0.01)
+
+    obs = _obs_to_dict(env, env.step(np.array([0]*num_envs))[0].T)
+    assert (obs['x'] == 2).sum() + (obs['x'] == 3).sum() + (obs['x'] == 4).sum() == num_envs
+    assert (obs['x'] == 2).mean() == approx(0.49, abs=0.01)
+    assert (obs['x'] == 3).mean() == approx(0.42, abs=0.01)
+    assert (obs['x'] == 4).mean() == approx(0.09, abs=0.01)
