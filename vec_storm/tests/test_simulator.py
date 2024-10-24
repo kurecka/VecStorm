@@ -20,6 +20,25 @@ def load_pomdp(env_path):
     return quotient.pomdp
 
 
+def test_enable_random_init_changes_hash():
+    pomdp = load_pomdp(AVOID_DET)
+    env = StormVecEnv(pomdp, lambda x, y: 0, num_envs=1)
+    hash_before = hash(env.simulator)
+    env.enable_random_init()
+    hash_after = hash(env.simulator)
+    assert hash_before != hash_after
+
+
+def test_disable_random_init_changes_hash():
+    pomdp = load_pomdp(AVOID_DET)
+    env = StormVecEnv(pomdp, lambda x, y: 0, num_envs=1)
+    env.enable_random_init()
+    hash_before = hash(env.simulator)
+    env.disable_random_init()
+    hash_after = hash(env.simulator)
+    assert hash_before != hash_after
+
+
 def test_save_load():
     pomdp = load_pomdp(AVOID_DET)
 
@@ -41,7 +60,7 @@ def _get_cost_reward(rewards, rewards_types):
 
 def _obs_to_dict(env, obs):
     return {
-        key: val for key, val in zip(env.observation_labels, obs)
+        key: val for key, val in zip(env.get_observation_labels(), obs)
     }
 
 def test_reset():

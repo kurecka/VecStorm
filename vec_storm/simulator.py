@@ -1,4 +1,5 @@
 from functools import partial
+from typing import List
 
 import jax
 import jax.numpy as jnp
@@ -33,18 +34,33 @@ class StepInfo:
 
 @chex.dataclass
 class Simulator:
+    id: int
+
     initial_state: int
     max_outcomes: int
     max_steps: int
+    random_init: bool
+
     transitions: SparseArray
     rewards: SparseArray
     observations: chex.Array
     sinks: chex.Array
     allowed_actions: chex.Array
     metalabels: chex.Array
+    labels: chex.Array
+
+    action_labels: List[str]
+    observation_labels: List[str]
+
+    FREE_ID = 0
 
     def __hash__(self):
-        return id(self)
+        return self.id
+
+    @staticmethod
+    def get_free_id():
+        Simulator.FREE_ID += 1
+        return Simulator.FREE_ID
 
     def sample_next_vertex(self: "Simulator", vertex, action, rng_key):
         l, r = self.transitions.get_row_range(vertex, action)
@@ -64,7 +80,7 @@ class Simulator:
         return self.sinks[vertex]
 
     def get_init_states(self: "Simulator", states, rng_key=None):
-        if rng_key == None:
+        if self.random_init == False:
             vertices = states.vertices.at[:].set(self.initial_state)
         else:
             vertices = jax.random.randint(rng_key, states.vertices.shape, 0, len(self.sinks))
@@ -85,8 +101,8 @@ class Simulator:
             metalabels = self.metalabels[new_states.vertices],
         )
 
-    @partial(jax.jit, static_argnums=0, static_argnames="random_init")
-    def step(self: "Simulator", states, actions, rng_key, random_init=False) -> StepInfo:
+    @partial(jax.jit, static_argnums=0)
+    def step(self: "Simulator", states, actions, rng_key) -> StepInfo:
         key1, key2 = jax.random.split(rng_key)
         new_vertices, new_vertex_idxs = jax.vmap(lambda s, a, k: self.sample_next_vertex(s, a, k))(states.vertices, actions, jax.random.split(key1, len(actions)))
         # Compute rewards of the transitions s -> a -> s'
@@ -95,7 +111,7 @@ class Simulator:
         trunc = steps >= self.max_steps
         done = self.sinks[new_vertices] | trunc
         # Reset done state s' to initial state i
-        if not random_init:
+        if not self.random_init:
             key2 = None
         vertices_after_reset = jnp.where(done, self.get_init_states(states, rng_key=key2).vertices, new_vertices)
         steps_after_reset = jnp.where(done, 0, steps)
