@@ -13,6 +13,9 @@ from stormpy.storage.storage import SparsePomdp
 from .sparse_array import SparseArray
 from .simulator import Simulator, States, StepInfo, ResetInfo
 
+import logging
+logger = logging.getLogger(__name__)
+
 
 def cast2jax(data):
     if isinstance(data, SparseArray):
@@ -62,6 +65,7 @@ class StormVecEnvBuilder:
 
         # Row map: Assigns each (state, action) pair a row in the spare transition/reward matrix
         # or -1 if the action is not allowed in the state
+        logger.info("Computing row map")
         row_map = np.zeros(nr_states * nr_actions, dtype=np.int32)
         row_map[:] = -1
         for state in range(nr_states):
@@ -73,15 +77,19 @@ class StormVecEnvBuilder:
                         row_map[state * nr_actions + action_idx] = pomdp.transition_matrix.get_rows_for_group(state)[action_offset]
 
         # Transitions
+        logger.info("Computing transitions")
         transitions = SparseArray.from_data(nr_states, nr_actions, row_map, pomdp.transition_matrix)
 
         # Allowed actions
+        logger.info("Computing allowed actions")
         allowed_actions = (row_map != -1).reshape(nr_states, nr_actions)
 
         # Sinks
+        logger.info("Computing sinks")
         sinks = ~allowed_actions.any(axis=-1)
 
         # Raw rewards
+        logger.info("Computing raw rewards")
         raw_rewards = {}
 
         for reward_type in rewards_types:
@@ -97,13 +105,15 @@ class StormVecEnvBuilder:
                 raise NotImplementedError("Transition rewards are not supported")
 
             if reward_model.has_state_action_rewards:
+                state_action_rewards = np.array(reward_model.state_action_rewards)
                 for sa_idx in range(nr_states * nr_actions):
                     row_idx = row_map[sa_idx]
                     if row_idx == -1:
                         continue
-                    raw_rewards[reward_type].get_row_np(sa_idx)[:] += reward_model.state_action_rewards[row_idx]
+                    raw_rewards[reward_type].get_row_np(sa_idx)[:] += state_action_rewards[row_idx]
 
         # Assign labels to states
+        logger.info("Computing labels")
         labeling = pomdp.labeling
         labels = {}
         for label in labeling.get_labels():
@@ -112,6 +122,7 @@ class StormVecEnvBuilder:
                 labels[label][state] = 1
 
         # Rewards
+        logger.info("Computing scalarized rewards")
         rewards = SparseArray.zeros_like(transitions)
         reward_data = {
             reward_type: raw_rewards[reward_type].data
@@ -120,6 +131,7 @@ class StormVecEnvBuilder:
         rewards.data = get_scalarized_reward(reward_data, rewards_types)
 
         # Metalabels
+        logger.info("Computing metalabels")
         metalabel_keys = None if metalabels is None else list(metalabels.keys())
         metalabels_data = None
         if metalabel_keys is not None:
@@ -131,15 +143,19 @@ class StormVecEnvBuilder:
             metalabels_data = np.zeros((nr_states, 0), dtype=bool)
 
         # Observations
+        logger.info("Computing observations")
         valuations = pomdp.observation_valuations
         nr_observables = len(json.loads(str(valuations.get_json(0))))
 
-        observations = np.zeros((nr_states, nr_observables), dtype=np.float32)
+        observations_by_ids = np.zeros((pomdp.nr_observations, nr_observables), dtype=np.float32)
         observation_labels = list(json.loads(str(valuations.get_json(0))).keys())
-        for state in range(nr_states):
-            observation_id = pomdp.observations[state]
-            valuation_json = json.loads(str(valuations.get_json(observation_id)))
-            observations[state] = np.array(list(valuation_json.values()), dtype=np.float32)
+
+        for obs_id in range(pomdp.nr_observations):
+            valuation_json = json.loads(str(valuations.get_json(obs_id)))
+            observations_by_ids[obs_id] = np.array(list(valuation_json.values()), dtype=np.float32)
+
+        state_observation_ids = np.array(pomdp.observations)
+        observations = observations_by_ids[state_observation_ids]
 
         # Save simulator data
         return Simulator(
