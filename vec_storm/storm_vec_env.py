@@ -218,7 +218,7 @@ class StormVecEnv:
 
     def reset(self):
         self.rng_key, reset_key = jax.random.split(self.rng_key)
-        res: ResetInfo = self.simulator.reset(self.simulator_states, reset_key if self.random_init else None)
+        res: ResetInfo = self.simulator.reset(self.simulator_states, reset_key)
         self.simulator_states = res.states
         return res.observations, res.allowed_actions, res.metalabels
     
@@ -259,4 +259,10 @@ class StormVecEnv:
     
     @classmethod
     def load(cls, file: str):
-        return pickle.load(open(file, "rb" ))
+        env = pickle.load(open(file, "rb" ))
+        env.simulator.id = Simulator.get_free_id()
+        return env
+
+    @property
+    def nr_states(self):
+        return len(self.simulator.sinks)

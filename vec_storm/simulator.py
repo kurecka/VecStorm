@@ -79,7 +79,7 @@ class Simulator:
     def is_done(self: "Simulator", vertex):
         return self.sinks[vertex]
 
-    def get_init_states(self: "Simulator", states, rng_key=None):
+    def get_init_states(self: "Simulator", states, rng_key):
         if self.random_init == False:
             vertices = states.vertices.at[:].set(self.initial_state)
         else:
@@ -91,7 +91,7 @@ class Simulator:
         )
 
     @partial(jax.jit, static_argnums=0)
-    def reset(self: "Simulator", states: States, rng_key = None) -> ResetInfo:
+    def reset(self: "Simulator", states: States, rng_key) -> ResetInfo:
         new_states = self.get_init_states(states, rng_key)
         observations = jax.vmap(lambda s: self.get_observation(s))(new_states.vertices)
         return ResetInfo(
