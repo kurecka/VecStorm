@@ -1,4 +1,4 @@
-from typing import Set
+from typing import Set, Dict, Tuple
 import json
 import pickle
 
@@ -182,7 +182,29 @@ class StormVecEnv:
         It uses JAX to compile the topology extracted from the given model, thus accelerating the interactions.
     """
 
-    def __init__(self, pomdp: SparsePomdp, get_scalarized_reward, num_envs=1, seed=42, metalabels=None, random_init=False, max_steps=100):
+    def __init__(self, pomdp: SparsePomdp, get_scalarized_reward: Dict[np.array], num_envs=1, seed=42, metalabels=None, random_init=False, max_steps=100):
+        """
+            pomdp: The POMDP object that should be compiled into a jax-based environment.
+            get_scalarized_reward: A function that accepts a dictionary indexed by reward signal names and returns an array of scalarized rewards.
+
+            Example:
+            get_scalarized_reward = lambda rewards: rewards['reward1'] + rewards['reward2']
+
+            num_envs: The number of environments to be simulated in parallel.
+            seed: The seed for the random number generator.
+            metalabels: A dictionary of metalabels to be used in the environment. For each metalabel,
+            the dictionary should contain a list of labels whose conjunction defines the metalabel.
+
+            Example:
+            metalabels = {
+                "metalabel1": ["label1", "label2"],
+                "metalabel2": ["label3"]
+            }
+
+            labels(s1) = [label1, label2] => metalabel1(s1) = True
+            labels(s2) = [label3] => metalabel2(s2) = True
+            labels(s3) = [label1] => metalabel1(s3) = False
+        """
         self.simulator_states = States(
             vertices = jnp.zeros(num_envs, jnp.int32),
             steps = jnp.zeros(num_envs, jnp.int32),
@@ -216,13 +238,34 @@ class StormVecEnv:
     def set_seed(self, seed):
         self.rng_key = jax.random.key(seed)
 
-    def reset(self):
+    def reset(self) -> Tuple[jnp.array, jnp.array, jnp.array]:
+        """
+            Reset all the environments. If `random_init` is set to True, the initial state will be randomly selected.
+
+            Returns:
+            - observations: The observations of the new states.
+            - allowed_actions: The boolean mask of allowed actions for the new states.
+            - metalabels: The boolean mask of metalabels for the new states.
+        """
         self.rng_key, reset_key = jax.random.split(self.rng_key)
         res: ResetInfo = self.simulator.reset(self.simulator_states, reset_key)
         self.simulator_states = res.states
         return res.observations, res.allowed_actions, res.metalabels
     
-    def step(self, actions):
+    def step(self, actions) -> Tuple[jnp.array, jnp.array, jnp.array, jnp.array, jnp.array, jnp.array]:
+        """
+            Perform a step in the environment.
+
+            actions: The actions to be taken in the current states.
+
+            Returns:
+            - observations: The observations of the new states (after the potential reset).
+            - rewards: The rewards of the transitions (before the potential reset).
+            - done: A boolean mask indicating if the new states are terminal (before the potential reset).
+            - truncated: A boolean mask indicating if the new states reached the maximum number of steps (before the potential reset).
+            - allowed_actions: The boolean mask of allowed actions for the new states (after the potential reset).
+            - metalabels: The boolean mask of metalabels for the new states (before the potential reset).
+        """
         self.rng_key, step_key = jax.random.split(self.rng_key)
         res: StepInfo = self.simulator.step(self.simulator_states, actions, step_key)
         self.simulator_states = res.states
