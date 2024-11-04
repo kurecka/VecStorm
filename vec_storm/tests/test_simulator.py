@@ -134,7 +134,7 @@ def _test_trajectory(env, actions, expected_observations, expected_rewards, expe
     for i, action in enumerate(actions):
         assert(act_mask[0][action])
 
-        obs, rew, done, act_mask, labels = env.step(np.array([action]))
+        obs, rew, done, trunc, act_mask, labels = env.step(np.array([action]))
         o = _obs_to_dict(env, obs[0])
         for key, val in expected_observations.items():
             assert o[key] == approx(val[i+1])
@@ -292,3 +292,16 @@ def test_toggle_random_init():
     env.step(np.array([0]*num_envs))
     env.step(np.array([3]*num_envs))
     assert np.all(env.simulator_states.vertices == 0)
+
+
+def test_change_num_envs():
+    """
+        Test that the number of environments can be changed.
+    """
+    env = StormVecEnv(load_pomdp(AVOID_DET), _get_cost_reward, num_envs=1)
+    env.reset()
+    env.step(np.array([2]))
+    env.step(np.array([2]))
+    env.set_num_envs(2)
+    env.reset()
+    env.step(np.array([2, 2]))

@@ -226,7 +226,7 @@ class StormVecEnv:
         self.rng_key, step_key = jax.random.split(self.rng_key)
         res: StepInfo = self.simulator.step(self.simulator_states, actions, step_key)
         self.simulator_states = res.states
-        return res.observations, res.rewards, res.done, res.allowed_actions, res.metalabels
+        return res.observations, res.rewards, res.done, res.truncated, res.allowed_actions, res.metalabels
 
     def get_label(self, label, vertices=None):
         if vertices is None:

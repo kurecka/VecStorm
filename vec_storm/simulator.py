@@ -28,6 +28,7 @@ class StepInfo:
     observations: chex.Array
     rewards: chex.Array
     done: chex.Array
+    truncated: chex.Array
     allowed_actions: chex.Array
     metalabels: chex.Array
 
@@ -124,6 +125,7 @@ class Simulator:
             observations = observations,
             rewards = rewards,
             done = done,
+            truncated = trunc,
             allowed_actions = self.allowed_actions[vertices_after_reset],
             metalabels = metalabels,
         )
