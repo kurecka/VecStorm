@@ -182,7 +182,7 @@ class StormVecEnv:
         It uses JAX to compile the topology extracted from the given model, thus accelerating the interactions.
     """
 
-    def __init__(self, pomdp: SparsePomdp, get_scalarized_reward: Dict[np.array], num_envs=1, seed=42, metalabels=None, random_init=False, max_steps=100):
+    def __init__(self, pomdp: SparsePomdp, get_scalarized_reward: Dict[str, np.array], num_envs=1, seed=42, metalabels=None, random_init=False, max_steps=100):
         """
             pomdp: The POMDP object that should be compiled into a jax-based environment.
             get_scalarized_reward: A function that accepts a dictionary indexed by reward signal names and returns an array of scalarized rewards.
