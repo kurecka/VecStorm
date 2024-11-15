@@ -224,16 +224,19 @@ class StormVecEnv:
     def enable_random_init(self):
         self.simulator.id = Simulator.get_free_id()
         self.simulator.random_init = True
+        jax.clear_caches()
     
     def disable_random_init(self):
         self.simulator.id = Simulator.get_free_id()
         self.simulator.random_init = False
+        jax.clear_caches()
     
     def set_num_envs(self, num_envs):
         self.simulator_states = States(
             vertices = jnp.zeros(num_envs, jnp.int32),
             steps = jnp.zeros(num_envs, jnp.int32),
         )
+        jax.clear_caches()
     
     def set_seed(self, seed):
         self.rng_key = jax.random.key(seed)
@@ -309,3 +312,6 @@ class StormVecEnv:
     @property
     def nr_states(self):
         return len(self.simulator.sinks)
+    
+    def __del__(self):
+        jax.clear_caches()
