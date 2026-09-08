@@ -7,8 +7,6 @@ import numpy as np
 import jax
 from jax import numpy as jnp
 
-from stormpy import simulator
-
 from .sparse_array import SparseArray
 from .simulator import Simulator, States, StepInfo, ResetInfo
 
@@ -53,6 +51,10 @@ class StormVecEnvBuilder:
             pomdp: The POMDP object that should be compiled into a jax-based environment.
             get_scalarized_reward: A function that accepts a dictionary indexed by reward signal names and returns a number.
         """
+        # Imported lazily so that stormpy is only required when actually compiling a
+        # POMDP; loading a previously-saved StormVecEnv (`StormVecEnv.load`) or using
+        # a hand-built `Simulator` does not need stormpy to be installed at all.
+        from stormpy import simulator
 
         sim = simulator.create_simulator(pomdp)
         action_labels = cls.get_action_labels(pomdp, cls.NO_LABEL)

@@ -149,7 +149,11 @@ class Simulator:
     def step(self: "Simulator", states, actions, rng_key) -> StepInfo:
         key1, key2 = jax.random.split(rng_key)
         prev_trunc = states.steps >= self.max_steps # added
-        prev_done = self.sinks[states.vertices]
+        # A state counts as "done" for the purposes of the next reset both when it is a
+        # genuine sink and when any of its metalabels is set (see `done_with_metalabels`
+        # below) - otherwise the environment would keep simulating past a state that was
+        # already reported as terminal to the caller.
+        prev_done = self.sinks[states.vertices] | jnp.any(self.metalabels[states.vertices], axis=-1)
         new_vertices, new_vertex_idxs = jax.vmap(lambda s, a, k: self.sample_next_vertex(s, a, k))(states.vertices,
                                                                                                    actions,
                                                                                                    jax.random.split(
@@ -176,11 +180,16 @@ class Simulator:
         allowed_actions = jnp.where(jnp.tile(jnp.reshape(done, (-1, 1)), (1, allowed_actions.shape[1])),
                                     jnp.ones_like(allowed_actions), allowed_actions)
         integer_observations = self.state_observation_ids[vertices_after_reset].reshape(-1, 1)
+        # A state is also considered done if any of its metalabels is set (e.g. a
+        # designated goal metalabel), even when the underlying model state is not
+        # itself a sink. jnp.any reduces over the metalabels axis so this works
+        # regardless of how many metalabels are configured.
+        done_with_metalabels = done | trunc | jnp.any(metalabels, axis=-1)
         return StepInfo(
             states=States(vertices=vertices_after_reset, steps=steps_after_reset),
             observations=observations,
             rewards=rewards,
-            done=done | trunc,
+            done=done_with_metalabels,
             truncated=trunc,
             allowed_actions=allowed_actions,
             metalabels=metalabels,
