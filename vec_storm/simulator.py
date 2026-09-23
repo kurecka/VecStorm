@@ -13,6 +13,13 @@ class States:
     vertices: chex.Array
     steps: chex.Array
 
+    def slice(self, start: int, end: int) -> "States":
+        """Return a sliced version of the States object."""
+        return States(
+            vertices=self.vertices[start:end],
+            steps=self.steps[start:end]
+        )
+
 
 @chex.dataclass
 class ResetInfo:
@@ -20,6 +27,7 @@ class ResetInfo:
     observations: chex.Array
     allowed_actions: chex.Array
     metalabels: chex.Array
+    integer_observations: chex.Array = None
 
 
 @chex.dataclass
@@ -31,6 +39,33 @@ class StepInfo:
     truncated: chex.Array
     allowed_actions: chex.Array
     metalabels: chex.Array
+    integer_observations: chex.Array = None
+
+    @staticmethod
+    def combine(step_infos: List["StepInfo"]) -> "StepInfo":
+        """Combine multiple StepInfo objects into one."""
+        combined_states = States(
+            vertices=jnp.concatenate([si.states.vertices for si in step_infos]),
+            steps=jnp.concatenate([si.states.steps for si in step_infos])
+        )
+        combined_observations = jnp.concatenate([si.observations for si in step_infos])
+        combined_rewards = jnp.concatenate([si.rewards for si in step_infos])
+        combined_done = jnp.concatenate([si.done for si in step_infos])
+        combined_truncated = jnp.concatenate([si.truncated for si in step_infos])
+        combined_allowed_actions = jnp.concatenate([si.allowed_actions for si in step_infos])
+        combined_metalabels = jnp.concatenate([si.metalabels for si in step_infos])
+        integer_observations = jnp.concatenate([si.integer_observations for si in step_infos]) if step_infos[0].integer_observations is not None else None
+
+        return StepInfo(
+            states=combined_states,
+            observations=combined_observations,
+            rewards=combined_rewards,
+            done=combined_done,
+            truncated=combined_truncated,
+            allowed_actions=combined_allowed_actions,
+            metalabels=combined_metalabels,
+            integer_observations=integer_observations
+        )
 
 
 @chex.dataclass
@@ -52,6 +87,12 @@ class Simulator:
 
     action_labels: List[str]
     observation_labels: List[str]
+
+    state_values: chex.Array
+    state_labels: chex.Array
+    state_observation_ids: chex.Array
+
+    observation_by_ids: chex.Array
 
     FREE_ID = 0
 
@@ -85,7 +126,7 @@ class Simulator:
             vertices = states.vertices.at[:].set(self.initial_state)
         else:
             vertices = jax.random.randint(rng_key, states.vertices.shape, 0, len(self.sinks))
-        
+            vertices = jnp.where(self.sinks[vertices], self.initial_state, vertices)
         return States(
             vertices = vertices,
             steps = jnp.zeros_like(states.steps),
@@ -95,37 +136,88 @@ class Simulator:
     def reset(self: "Simulator", states: States, rng_key) -> ResetInfo:
         new_states = self.get_init_states(states, rng_key)
         observations = jax.vmap(lambda s: self.get_observation(s))(new_states.vertices)
+        integer_observations = self.state_observation_ids[new_states.vertices].reshape(-1, 1) 
         return ResetInfo(
             states = new_states,
             observations = observations,
             allowed_actions = self.allowed_actions[new_states.vertices],
             metalabels = self.metalabels[new_states.vertices],
+            integer_observations = integer_observations
         )
 
     @partial(jax.jit, static_argnums=0)
     def step(self: "Simulator", states, actions, rng_key) -> StepInfo:
         key1, key2 = jax.random.split(rng_key)
-        new_vertices, new_vertex_idxs = jax.vmap(lambda s, a, k: self.sample_next_vertex(s, a, k))(states.vertices, actions, jax.random.split(key1, len(actions)))
+        prev_trunc = states.steps >= self.max_steps # added
+        # A state counts as "done" for the purposes of the next reset both when it is a
+        # genuine sink and when any of its metalabels is set (see `done_with_metalabels`
+        # below) - otherwise the environment would keep simulating past a state that was
+        # already reported as terminal to the caller.
+        prev_done = self.sinks[states.vertices] | jnp.any(self.metalabels[states.vertices], axis=-1)
+        new_vertices, new_vertex_idxs = jax.vmap(lambda s, a, k: self.sample_next_vertex(s, a, k))(states.vertices,
+                                                                                                   actions,
+                                                                                                   jax.random.split(
+                                                                                                       key1,
+                                                                                                       len(actions)))
         # Compute rewards of the transitions s -> a -> s'
         rewards = jax.vmap(lambda new_s: self.get_reward(new_s))(new_vertex_idxs)
         steps = states.steps + 1
-        trunc = steps >= self.max_steps
-        done = self.sinks[new_vertices] | trunc
         # Reset done state s' to initial state i
         if not self.random_init:
             key2 = None
-        vertices_after_reset = jnp.where(done, self.get_init_states(states, rng_key=key2).vertices, new_vertices)
-        steps_after_reset = jnp.where(done, 0, steps)
+        vertices_after_reset = jnp.where(prev_done | prev_trunc, self.get_init_states(states, rng_key=key2).vertices, new_vertices)
+        # done = jnp.where(prev_done, False, done)
+
+        done = self.sinks[vertices_after_reset]
+        steps_after_reset = jnp.where(prev_done | prev_trunc, 0, steps)
+        trunc = steps_after_reset >= self.max_steps
+        rewards = jnp.where(prev_done | prev_trunc, 0, rewards)
+
         # Compute observation of states after reset (s' or i)
         observations = jax.vmap(lambda s: self.get_observation(s))(vertices_after_reset)
-        metalabels = self.metalabels[new_vertices]
+        metalabels = self.metalabels[vertices_after_reset]
+        allowed_actions = self.allowed_actions[vertices_after_reset]
+        allowed_actions = jnp.where(jnp.tile(jnp.reshape(done, (-1, 1)), (1, allowed_actions.shape[1])),
+                                    jnp.ones_like(allowed_actions), allowed_actions)
+        integer_observations = self.state_observation_ids[vertices_after_reset].reshape(-1, 1)
+        # A state is also considered done if any of its metalabels is set (e.g. a
+        # designated goal metalabel), even when the underlying model state is not
+        # itself a sink. jnp.any reduces over the metalabels axis so this works
+        # regardless of how many metalabels are configured.
+        done_with_metalabels = done | trunc | jnp.any(metalabels, axis=-1)
+        return StepInfo(
+            states=States(vertices=vertices_after_reset, steps=steps_after_reset),
+            observations=observations,
+            rewards=rewards,
+            done=done_with_metalabels,
+            truncated=trunc,
+            allowed_actions=allowed_actions,
+            metalabels=metalabels,
+            integer_observations=integer_observations
+        )
+    
+    def no_step(self : "Simulator", states):
+        """Simulate a step without any action taken."""
+        # Compute observation of states after reset (s' or i)
+        observations = jax.vmap(lambda s: self.get_observation(s))(states.vertices)
+        metalabels = self.metalabels[states.vertices]
+        trunc = states.steps >= self.max_steps
+        done = self.sinks[states.vertices]
+        allowed_actions = self.allowed_actions[states.vertices]
+        allowed_actions = jnp.where(jnp.tile(jnp.reshape(done, (-1, 1)), (1, allowed_actions.shape[1])), 
+                                    jnp.ones_like(allowed_actions), allowed_actions)
+        rewards = jax.vmap(lambda s: self.get_reward(s))(states.steps)
 
         return StepInfo(
-            states = States(vertices = vertices_after_reset, steps = steps_after_reset),
+            states = states,
             observations = observations,
             rewards = rewards,
             done = done,
             truncated = trunc,
-            allowed_actions = self.allowed_actions[vertices_after_reset],
+            allowed_actions = allowed_actions,
             metalabels = metalabels,
         )
+
+    
+    def set_max_steps(self, max_steps):
+        self.max_steps = max_steps

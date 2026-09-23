@@ -50,9 +50,8 @@ if __name__ == '__main__':
         quotient = paynt.parser.sketch.Sketch.load_sketch(sketch_path, properties_path)
         return quotient.pomdp
     
-    model_path = "/opt/learning/synthesis/rl_src/models_large/network-5-10-8"
-    # model_path = "/opt/learning/synthesis/rl_src/models/network-3-8-20"
-    # model_path = "/opt/learning/synthesis/rl_src/models/refuel-10"
+    model_path = "./vec_storm/tests/models/det_avoid"
+    # model_path = "./vec_storm/tests/models/rand_avoid"
     pomdp = load_pomdp(model_path)
 
     def get_scalarized_reward(rewards, rewards_types):
